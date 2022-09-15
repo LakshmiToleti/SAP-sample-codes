@@ -1,0 +1,253 @@
+REPORT zsd_r_sale_order_create.
+INCLUDE:zsd_so_creare_top,
+        zsd_so_creare_sel,
+        zsd_so_creare_frm.
+
+START-OF-SELECTION.
+  IF p_file IS NOT INITIAL.
+    PERFORM upload_file.
+    IF gt_itab[] IS NOT INITIAL.
+      PERFORM create_order.
+    ENDIF.
+
+  ENDIF.
+  *&---------------------------------------------------------------------*
+*& Include          ZSD_SO_CREARE_TOP
+*&---------------------------------------------------------------------*
+TYPES : BEGIN OF tp_itab,
+          cust_no       TYPE kunnr,
+          sap_cust_no   TYPE kunnr,
+          matnr         TYPE matnr,
+          sap_matnr(18) TYPE c,
+          date          TYPE bstdk,
+          vbeln         TYPE vbeln,
+          address       TYPE string,
+          qty           TYPE menge_d,
+        END OF tp_itab.
+
+DATA : gt_itab  TYPE STANDARD TABLE OF tp_itab,
+       gs_itab  TYPE tp_itab,
+       gs_itab1 TYPE tp_itab,
+       gt_item  TYPE TABLE OF tp_itab.
+
+
+DATA : order_header_in      LIKE bapisdhd1,
+       order_header_inx     LIKE bapisdhd1x,
+       salesdocument        LIKE  bapivbeln-vbeln,
+       return               LIKE  bapiret2  OCCURS 0 WITH HEADER LINE,
+       order_items_in       LIKE  bapisditm OCCURS 0 WITH HEADER LINE,
+       order_items_inx      LIKE  bapisditmx OCCURS 0 WITH HEADER LINE,
+       order_partners       LIKE  bapiparnr OCCURS 0 WITH HEADER LINE,
+       order_schedules_in   LIKE  bapischdl OCCURS 0 WITH HEADER LINE,
+       order_schedules_inx  LIKE  bapischdlx OCCURS 0 WITH HEADER LINE,
+       order_conditions_in  LIKE  bapicond OCCURS 0 WITH HEADER LINE,
+       order_conditions_inx LIKE  bapicondx OCCURS 0 WITH HEADER LINE.
+
+
+
+DATA : gv_file TYPE string,
+       gv_item TYPE vbap-posnr,
+       it_type TYPE truxs_t_text_data.
+
+*&---------------------------------------------------------------------*
+*& Include          ZSD_SO_CREARE_SEL
+*&---------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF BLOCK B1 WITH FRAME TITLE TEXT-001.
+PARAMETERS : P_FILE TYPE IBIPPARMS-PATH OBLIGATORY.
+SELECTION-SCREEN END OF BLOCK B1.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR P_FILE.
+  DATA: lt_filetable TYPE filetable,
+        rc           TYPE i.
+
+  CALL FUNCTION 'F4_FILENAME'
+    EXPORTING
+      PROGRAM_NAME  = SYST-CPROG
+      DYNPRO_NUMBER = SYST-DYNNR
+*     FIELD_NAME    = ' '
+    IMPORTING
+      FILE_NAME     = P_FILE.
+
+*&---------------------------------------------------------------------*
+*& Include          ZSD_SO_CREARE_FRM
+*&---------------------------------------------------------------------*
+FORM upload_file .
+
+  "gv_file = p_file.
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+*     i_field_seperator    =
+      i_line_header        = 'X'
+      i_tab_raw_data       = it_type
+      i_filename           = p_file
+    TABLES
+      i_tab_converted_data = gt_itab[]
+    EXCEPTIONS
+      conversion_failed    = 1
+      OTHERS               = 2.
+
+  IF sy-subrc NE 0.
+
+    MESSAGE ID sy-msgid
+    TYPE sy-msgty
+    NUMBER sy-msgno
+    WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form CREATE_ORDER
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM create_order .
+  CLEAR : gs_itab, gs_itab1.
+  SORT gt_itab BY vbeln.
+  MOVE gt_itab TO gt_item.
+  DELETE ADJACENT DUPLICATES FROM gt_itab COMPARING vbeln.
+  REFRESH return.
+  LOOP AT gt_itab INTO gs_itab1.
+    CLEAR : order_header_in, order_header_inx, order_partners[], order_partners.
+
+    "HEADER infomration
+    SELECT SINGLE auart,
+                  vkorg,
+                  vtweg,
+                  spart FROM vbak
+      INTO @DATA(gw_vbak)
+      WHERE vbeln = @gs_itab1-vbeln.
+
+    order_header_in-doc_type   = 'TA'.
+    order_header_in-sales_org  = '1110'.
+    order_header_in-distr_chan = '10'.
+    order_header_in-division   = '00'.
+    order_header_in-req_date_h = gs_itab1-date.
+    order_header_in-purch_date = gs_itab1-date.
+    order_header_in-purch_no_c = gs_itab1-vbeln.
+*    order_header_in-purch_no_s = gs_itab1-sap_cust_no.
+
+    order_header_inx-updateflag = 'I'.
+    order_header_inx-doc_type   = 'X'.
+    order_header_inx-sales_org  = 'X'.
+    order_header_inx-distr_chan = 'X'.
+    order_header_inx-division   = 'X'.
+    order_header_inx-req_date_h   = 'X'.
+    order_header_inx-purch_date   = 'X'.
+    order_header_inx-purch_no_c   = 'X'.
+*    order_header_inx-purch_no_s   = 'X'.
+
+    " partner details.
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+      EXPORTING
+        input  = gs_itab1-sap_cust_no
+      IMPORTING
+        output = gs_itab1-sap_cust_no.
+
+    order_partners-partn_role   = 'WE'.
+    order_partners-partn_numb   = gs_itab1-sap_cust_no.
+    APPEND order_partners.
+    CLEAR : order_partners.
+*
+    order_partners-partn_role   = 'AG'.
+    order_partners-partn_numb   = gs_itab1-sap_cust_no.
+    APPEND order_partners.
+    CLEAR : order_partners.
+
+
+    "lien items
+    LOOP AT gt_item INTO gs_itab WHERE vbeln = gs_itab1-vbeln.
+      gv_item   = gv_item + 10.
+
+      order_items_in-itm_number    = gv_item.
+*
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = gs_itab-sap_matnr
+        IMPORTING
+          output = gs_itab-sap_matnr.
+
+      order_items_in-material      = gs_itab-sap_matnr.
+      order_items_in-target_qty    = gs_itab-qty.
+      order_items_in-plant         = '1110'.
+      APPEND order_items_in.
+      CLEAR : order_items_in.
+
+      order_items_inx-itm_number    = gv_item.
+      order_items_inx-material      = 'X'.
+      order_items_inx-target_qty    = 'X'.
+      order_items_inx-plant         = 'X'.
+      APPEND order_items_inx.
+      CLEAR : order_items_inx.
+
+      "schedul el lines
+      order_schedules_in-itm_number = gv_item.
+      order_schedules_in-req_qty    = gs_itab-qty.
+      order_schedules_in-req_date    = '01/08/2022'."gs_itab-date.
+      APPEND order_schedules_in.
+      CLEAR : order_schedules_in.
+
+      order_schedules_inx-itm_number = gv_item.
+      order_schedules_inx-req_qty    = 'X'.
+      order_schedules_inx-req_date    = 'X'.
+      APPEND order_schedules_inx.
+      CLEAR : order_schedules_inx.
+
+*    "condiotn values
+*    order_conditions_in-itm_number  = gv_item.
+*    order_conditions_in-cond_type   = 'PPR0'.
+
+*    CONDENSE gs_itab-price.
+*    order_conditions_in-cond_value = '10'."( gs_itab-price / 10 ).
+*    APPEND order_conditions_in.
+*    CLEAR : order_conditions_in.
+*
+*    order_conditions_inx-itm_number  = gv_item.
+*    order_conditions_inx-cond_type    = 'PPR0'.
+*    order_conditions_inx-cond_value   = 'X'.
+*    APPEND order_conditions_inx.
+*    CLEAR : order_conditions_inx.
+
+
+      CLEAR : gs_itab.
+    ENDLOOP.
+
+    "call bapi
+    CALL FUNCTION 'BAPI_SALESORDER_CREATEFROMDAT2'
+      EXPORTING
+*       SALESDOCUMENTIN      =
+        order_header_in      = order_header_in
+        order_header_inx     = order_header_inx
+      IMPORTING
+        salesdocument        = salesdocument
+      TABLES
+        return               = return
+        order_items_in       = order_items_in
+        order_items_inx      = order_items_inx
+        order_partners       = order_partners
+        order_schedules_in   = order_schedules_in
+        order_schedules_inx  = order_schedules_inx
+        order_conditions_in  = order_conditions_in
+        order_conditions_inx = order_conditions_inx.
+
+    IF salesdocument IS NOT INITIAL.
+
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+        EXPORTING
+          wait = 'X'
+*         IMPORTING
+*         RETURN        =
+        .
+
+      WRITE : salesdocument.
+
+    ELSE.
+      LOOP AT return INTO DATA(gs_return).
+        WRITE : / gs_return-message.
+      ENDLOOP.
+
+    ENDIF.
+  ENDLOOP.
+ENDFORM.
