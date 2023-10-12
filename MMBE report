@@ -1,0 +1,786 @@
+*&---------------------------------------------------------------------*
+*& Report ZSAMPLE_TREE1
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zmmbe.
+INCLUDE:zmmbe_top,
+        zmmbe_sel,
+        zmmbe_frm.
+
+*--- Start of selection
+START-OF-SELECTION.
+ PERFORM get_data.
+ PERFORM display_data.
+
+END-OF-SELECTION.
+
+*&---------------------------------------------------------------------*
+*& Include          ZMMBE_TOP
+*&---------------------------------------------------------------------*
+DATA: gr_tree TYPE REF TO cl_salv_tree.
+TYPES:BEGIN OF ty_final,
+        matnr      TYPE matnr,
+        werks      TYPE werks_d,  "Plant
+        lgort      TYPE lgort_d,
+        charg      TYPE charg_d,
+        maktx(100) TYPE c,
+        labst      TYPE labst2,   "Unrestricted Use
+        labst1      TYPE labst2,   "Unrestricted Use
+        menge      TYPE bestbest2, "On-order stock
+        omeng      TYPE menge_d,    "Schedule for delivery
+        bdmng      TYPE bdmng2,    "Reserved
+        bdmns      TYPE resb-bdmng,    "Rcpt reservation
+        umlmc      TYPE umlmc2,   "stck trans(Plant)
+        meins      TYPE meins,
+
+      END OF ty_final.
+DATA:gt_final TYPE TABLE OF ty_final,
+     gw_final TYPE ty_final.
+"ALV Tree Data
+
+DATA: gr_container TYPE REF TO cl_gui_custom_container,
+      gr_functions TYPE REF TO cl_salv_functions_tree,
+      settings     TYPE REF TO cl_salv_tree_settings,
+      title        TYPE salv_de_tree_text,
+      lr_columns   TYPE REF TO cl_salv_columns,
+      lr_column    TYPE REF TO cl_salv_column.
+
+DATA:old_menge TYPE plfh-mgvgw,
+     new_menge TYPE plfh-mgvgw.
+
+DATA: BEGIN OF xtab OCCURS 10,       " Open orders table
+        werks LIKE ekpo-werks,
+        lgort LIKE ekpo-lgort,
+        matnr LIKE ekpo-matnr,
+        menge LIKE ekpo-menge,
+        mengk LIKE ekpo-menge,
+        bdmns LIKE resb-bdmng,
+      END OF xtab.
+
+DATA: BEGIN OF xtab1 OCCURS 10,        "Tabelle der Reservierungen
+        werks    LIKE resb-werks,
+        lgort    LIKE resb-lgort,
+        charg    LIKE resb-charg,
+        matnr    LIKE resb-matnr,
+        bdmng    LIKE resb-bdmng,
+        bdmns    LIKE resb-bdmng,
+        erfme    LIKE resb-erfme,                      "ALRK014884 SW
+        erfmg    LIKE resb-erfmg,                      "ALRK014884 SW
+        sgt_rcat LIKE resb-sgt_rcat,
+        sgt_scat LIKE resb-sgt_scat,
+      END OF xtab1.
+RANGES: l_werks FOR mard-werks,
+        xbdart FOR resb-bdart.
+
+DATA:xtab_t1  LIKE TABLE OF xtab,
+     xtab1_t2 LIKE TABLE OF xtab1.
+"Internal table Data
+DATA:tt_final TYPE TABLE OF ty_final.
+DATA: kzwso       LIKE mara-kzwsm,
+      gr_sgt_scat TYPE sgt_tt_scat_r.
+
+*&---------------------------------------------------------------------*
+*& Include          ZMMBE_SEL
+*&---------------------------------------------------------------------*
+*--- Selection-screen
+DATA:ls_mard TYPE mard.
+TABLES:mara.
+SELECTION-SCREEN: BEGIN OF BLOCK b1 WITH FRAME TITLE TEXT-001.
+  SELECT-OPTIONS:so_matnr FOR ls_mard-matnr NO-EXTENSION NO INTERVALS OBLIGATORY,
+                 so_werks FOR ls_mard-werks,
+                 so_meins FOR mara-meins NO-EXTENSION NO INTERVALS.
+
+SELECTION-SCREEN: END OF BLOCK b1.
+
+*&---------------------------------------------------------------------*
+*& Include          ZMMBE_FRM
+*&---------------------------------------------------------------------*
+  FORM get_data.
+    SELECT a~matnr,
+           a~werks,
+           a~lgort,
+           b~clabs,
+           b~charg,
+           c~umlmc,
+           d~meins
+      FROM mard AS  a
+      INNER JOIN mchb AS b
+      ON a~matnr = b~matnr
+      AND a~werks = b~werks
+      AND a~lgort = b~lgort
+      INNER JOIN marc AS c
+      ON a~matnr = c~matnr
+      AND a~werks = c~werks
+      INNER JOIN mara AS d
+      ON a~matnr = d~matnr
+      INTO TABLE @DATA(gt_mard)
+      WHERE a~matnr IN @so_matnr
+      AND a~werks IN @so_werks.
+    SORT gt_mard BY matnr werks lgort.
+    IF sy-subrc = 0.
+      SELECT matnr,werks,lgort,xloek,kzear,
+          shkzg,bdmng,enmng  FROM resb
+          INTO TABLE @DATA(gt_resb)
+          FOR ALL ENTRIES IN @gt_mard
+          WHERE matnr = @gt_mard-matnr
+          AND werks = @gt_mard-werks
+          AND lgort = @gt_mard-lgort
+          AND xloek = ' '
+          AND kzear = ' '.
+
+      SELECT matnr,werks,vbtyp,omeng
+        FROM vbbe
+        INTO TABLE @DATA(gt_vbbe)
+        FOR ALL ENTRIES IN @gt_mard
+        WHERE matnr = @gt_mard-matnr
+        AND werks = @gt_mard-werks
+        AND vbtyp = 'J'.
+    ENDIF.
+    LOOP AT gt_mard INTO DATA(wa_mard).
+      gw_final-werks = wa_mard-werks.
+      gw_final-matnr = wa_mard-matnr.
+      gw_final-lgort = wa_mard-lgort.
+      gw_final-charg = wa_mard-charg.
+
+
+
+      DATA(lv_enmng) = REDUCE enmng( INIT val TYPE enmng
+                       FOR wa IN gt_resb
+                       WHERE ( shkzg = 'H'AND matnr = wa_mard-matnr
+                       AND werks = wa_mard-werks AND lgort = wa_mard-lgort )
+                       NEXT val = val + wa-enmng ).
+
+      DATA(lv_bdmng) = REDUCE bdmng( INIT val TYPE bdmng
+                       FOR wa IN gt_resb
+                       WHERE ( shkzg = 'H'AND matnr = wa_mard-matnr
+                       AND werks = wa_mard-werks AND lgort = wa_mard-lgort )
+                       NEXT val = val + wa-bdmng ).
+      DATA(wa_vbbe) = VALUE #( gt_vbbe[ matnr = wa_mard-matnr
+                                        werks = wa_mard-werks ] OPTIONAL ).
+
+
+
+
+      SELECT SINGLE umrez FROM marm INTO @DATA(lv_umrez)
+        WHERE matnr = @gw_final-matnr
+        AND meinh IN ('CZ','CS').
+
+      IF wa_mard-meins = 'CZ'.
+        "Unrestricted Stock
+        gw_final-labst = wa_mard-clabs.
+        gw_final-labst1 = wa_mard-clabs.
+
+        ON CHANGE OF wa_mard-lgort.
+          "On order stock
+          REFRESH xtab_t1[].
+          PERFORM get_on_order_stc USING wa_mard-matnr wa_mard-meins CHANGING xtab_t1.
+          READ TABLE xtab_t1 INTO DATA(ls_xtab) WITH KEY werks = wa_mard-werks
+                                                         lgort = wa_mard-lgort.
+          IF sy-subrc = 0.
+            gw_final-menge = ls_xtab-menge.
+          ENDIF.
+          CLEAR ls_xtab.
+        ENDON.
+
+        "Shedule Delivery
+        gw_final-omeng = wa_vbbe-omeng.
+
+        "Reserve Stock
+        ON CHANGE OF wa_mard-lgort.
+          gw_final-bdmng = lv_bdmng - lv_enmng.
+        ENDON.
+        "Stock Transfer Plant
+        gw_final-umlmc = wa_mard-umlmc.
+
+        "RCPT Reservation
+        ON CHANGE OF wa_mard-lgort.
+          PERFORM rcpt_reservation USING wa_mard-matnr CHANGING xtab1_t2.
+
+          READ TABLE xtab1_t2 INTO DATA(ls_xtab1) WITH KEY werks = wa_mard-werks
+                                                        lgort = wa_mard-lgort.
+          "charg = wa_mard-charg.
+          IF sy-subrc = 0.
+            gw_final-bdmns = ls_xtab1-bdmns.
+          ENDIF.
+          CLEAR ls_xtab1.
+        ENDON.
+      ELSE.
+        IF lv_umrez IS NOT INITIAL.
+          "Unrestricted Stock
+          IF wa_mard-lgort CS 'SF'.
+            gw_final-labst = wa_mard-clabs.
+          ELSE.
+            gw_final-labst = wa_mard-clabs / lv_umrez.
+          ENDIF.
+          gw_final-labst1 = wa_mard-clabs / lv_umrez.
+          "On order stock
+          ON CHANGE OF wa_mard-lgort.
+            REFRESH xtab_t1[].
+            PERFORM get_on_order_stc USING wa_mard-matnr wa_mard-meins CHANGING xtab_t1.
+            READ TABLE xtab_t1 INTO ls_xtab WITH KEY werks = wa_mard-werks
+                                                     lgort = wa_mard-lgort.
+            IF sy-subrc = 0.
+              gw_final-menge = ls_xtab-menge / lv_umrez.
+            ENDIF.
+            CLEAR ls_xtab.
+          ENDON.
+
+          "Shedule Delivery
+          gw_final-omeng = wa_vbbe-omeng / lv_umrez.
+
+          "Reserve Stock
+          ON CHANGE OF wa_mard-lgort.
+            gw_final-bdmng = lv_bdmng - lv_enmng.
+            gw_final-bdmng = gw_final-bdmng / lv_umrez.
+          ENDON.
+          "Stock Transfer Plant
+          gw_final-umlmc = wa_mard-umlmc / lv_umrez.
+
+          "RCPT Reservation
+          ON CHANGE OF wa_mard-lgort.
+            PERFORM rcpt_reservation USING wa_mard-matnr CHANGING xtab1_t2.
+
+            READ TABLE xtab1_t2 INTO ls_xtab1 WITH KEY werks = wa_mard-werks
+                                                       lgort = wa_mard-lgort.
+            " charg = wa_mard-charg.
+            IF sy-subrc = 0.
+              gw_final-bdmns = ls_xtab1-bdmns / lv_umrez.
+            ENDIF.
+            CLEAR ls_xtab1.
+          ENDON.
+        ELSE.
+
+          "Unrestricted Stock
+          gw_final-labst = wa_mard-clabs.
+          gw_final-labst1 = wa_mard-clabs.
+
+          ON CHANGE OF wa_mard-lgort.
+            "On order stock
+            REFRESH xtab_t1[].
+            PERFORM get_on_order_stc USING wa_mard-matnr wa_mard-meins CHANGING xtab_t1.
+            READ TABLE xtab_t1 INTO ls_xtab WITH KEY werks = wa_mard-werks
+                                                           lgort = wa_mard-lgort.
+            IF sy-subrc = 0.
+              gw_final-menge = ls_xtab-menge.
+            ENDIF.
+            CLEAR ls_xtab.
+          ENDON.
+
+
+          "Shedule Delivery
+          gw_final-omeng = wa_vbbe-omeng.
+
+          "Reserve Stock
+          ON CHANGE OF wa_mard-lgort.
+            gw_final-bdmng = lv_bdmng - lv_enmng.
+          ENDON.
+          "Stock Transfer Plant
+          gw_final-umlmc = wa_mard-umlmc.
+          "RCPT Reservation
+          ON CHANGE OF wa_mard-lgort.
+            PERFORM rcpt_reservation USING wa_mard-matnr CHANGING xtab1_t2.
+
+            READ TABLE xtab1_t2 INTO ls_xtab1 WITH KEY werks = wa_mard-werks
+                                                       lgort = wa_mard-lgort.
+            "charg = wa_mard-charg.
+            IF sy-subrc = 0.
+              gw_final-bdmns = ls_xtab1-bdmns.
+            ENDIF.
+            CLEAR ls_xtab1.
+          ENDON.
+        ENDIF.
+      ENDIF.
+
+      SELECT SINGLE zzmaktx FROM marm INTO @DATA(lv_makt)
+        WHERE matnr = @gw_final-matnr
+        AND meinh IN ('CZ','CS')."@gw_final-meins.
+*        AND spras = 'E'.
+
+      IF gw_final-lgort CS 'SF'.
+        "UOM
+        IF wa_mard-meins = 'CZ'.
+          SELECT SINGLE meinh FROM marm INTO gw_final-meins WHERE meinh NOT IN ('CZ','CS').
+        ELSE.
+          gw_final-meins = wa_mard-meins.
+        ENDIF.
+        CLEAR gw_final-maktx.
+        CONCATENATE lv_makt 'EACH/Pieces' INTO gw_final-maktx SEPARATED BY ' '.
+      ELSE.
+        "UOM
+        gw_final-meins = wa_mard-meins.
+        CLEAR gw_final-maktx.
+        CONCATENATE lv_makt 'CASE' INTO gw_final-maktx SEPARATED BY ' '.
+      ENDIF.
+      "Convert the SF Storage location qty
+
+      CLEAR:old_menge,new_menge.
+      IF wa_mard-lgort CS 'SF'.
+        old_menge = gw_final-labst.
+        IF so_meins-low IS NOT INITIAL.
+*          SELECT SINGLE meinh FROM marm INTO @DATA(lv_meinh) WHERE matnr = @gw_final-matnr.
+          PERFORM uom_converstion USING gw_final-matnr
+                                        gw_final-meins
+                                        old_menge
+                                         so_meins-low "lv_meinh
+                          CHANGING new_menge.
+
+          gw_final-labst = new_menge.
+        ENDIF.
+      ENDIF.
+      CLEAR : lv_makt,lv_umrez.
+      APPEND gw_final TO tt_final.
+      CLEAR gw_final.
+    ENDLOOP.
+
+  ENDFORM.
+  FORM display_data.
+    DATA: lt_itab    LIKE tt_final , "OCCURS 0 WITH HEADER LINE.
+          lv_text    TYPE char100,
+          lo_header  TYPE REF TO cl_salv_form_layout_grid,
+          lo_h_label TYPE REF TO cl_salv_form_label,
+          lv_header  TYPE c LENGTH 150.
+
+    DATA: lr_display TYPE REF TO cl_salv_display_settings.
+
+
+    MOVE tt_final TO gt_final.
+    DATA(gt_final_tmp) = gt_final.
+
+    DELETE ADJACENT DUPLICATES FROM gt_final_tmp COMPARING matnr werks.
+
+    "Maintaing the Heading
+    READ TABLE gt_final_tmp INTO DATA(gw_final_tmp) INDEX 1.
+    CREATE OBJECT lo_header.
+    SELECT SINGLE zzmaktx FROM marm INTO @DATA(lv_maktx)
+      WHERE matnr = @gw_final_tmp-matnr
+      AND meinh IN ('CZ','CS')."@gw_final-meins.
+
+    SHIFT gw_final_tmp-matnr LEFT DELETING LEADING '0'.
+
+
+    "Material number
+    CONCATENATE 'Material: ' gw_final_tmp-matnr INTO lv_text SEPARATED BY ' '.
+*    lv_text = gw_final_tmp-matnr.
+    lo_h_label = lo_header->create_label( row = 1 column = 1 ).
+    lo_h_label->set_text( lv_text ).
+
+    "Material description
+    lv_text = lv_maktx.
+    lo_h_label = lo_header->create_label( row = 1 column = 3 ).
+    lo_h_label->set_text( lv_text ).
+
+    "Plant
+    IF so_werks[] IS NOT INITIAL.
+      SELECT SINGLE name1 FROM t001w  INTO @DATA(lv_name1)
+        WHERE werks IN @so_werks
+        AND spras = 'E'.
+      CONCATENATE 'Plant: ' so_werks-low INTO lv_text SEPARATED BY ' '.
+*    lv_text = gw_final_tmp-werks.
+      lo_h_label = lo_header->create_label( row = 2 column = 1 ).
+      lo_h_label->set_text( lv_text ).
+
+      "Plant Name
+      lv_text = lv_name1.
+      lo_h_label = lo_header->create_label( row = 2 column = 3 ).
+      lo_h_label->set_text( lv_text ).
+    ENDIF.
+* set the top of list using the header for Print.
+*-- Create an ALV Tree with an Empty table LT_ITAB, then later we will
+* the data.
+    CLEAR lt_itab[].
+    TRY.
+        CALL METHOD cl_salv_tree=>factory(
+          IMPORTING
+            r_salv_tree = gr_tree
+          CHANGING
+            t_table     = lt_itab[] ).
+      CATCH cx_salv_no_new_data_allowed cx_salv_error.
+        EXIT.
+    ENDTRY.
+
+
+    gr_tree->set_top_of_list( lo_header ).
+
+*-- Create Tree
+    PERFORM create_tree.
+
+*-- Columns
+
+    lr_columns = gr_tree->get_columns( ).
+    lr_columns->set_optimize( 'X' ).
+    TRY.
+        lr_column = lr_columns->get_column( 'WERKS').
+        lr_column->set_visible( abap_false ).
+      CATCH cx_salv_not_found.                          "#EC NO_HANDLER
+    ENDTRY.
+
+    TRY.
+        lr_column = lr_columns->get_column( 'MATNR').
+        lr_column->set_visible( abap_false ).
+      CATCH cx_salv_not_found.                          "#EC NO_HANDLER
+    ENDTRY.
+
+    TRY.
+        lr_column = lr_columns->get_column( 'LGORT').
+        lr_column->set_visible( abap_false ).
+      CATCH cx_salv_not_found.                          "#EC NO_HANDLER
+    ENDTRY.
+
+    TRY.
+        lr_column = lr_columns->get_column( 'CHARG').
+        lr_column->set_visible( abap_false ).
+      CATCH cx_salv_not_found.                          "#EC NO_HANDLER
+    ENDTRY.
+
+    TRY.
+
+        lr_column = lr_columns->get_column( 'OMENG' ).
+        lr_column->set_long_text( 'Schedule for Delivery' ).
+        lr_column->set_medium_text( 'Schd for Delivery' ).
+        lr_column->set_short_text( 'Schd.Del' ).
+      CATCH cx_salv_not_found.                          "#EC NO_HANDLER
+    ENDTRY.
+
+    TRY.
+
+        lr_column = lr_columns->get_column( 'BDMNG' ).
+        lr_column->set_long_text( 'Reserved' ).
+        lr_column->set_medium_text( 'Reserved' ).
+        lr_column->set_short_text( 'Reserved' ).
+      CATCH cx_salv_not_found.                          "#EC NO_HANDLER
+    ENDTRY.
+
+    TRY.
+
+        lr_column = lr_columns->get_column( 'BDMNS' ).
+        lr_column->set_long_text( 'Rcpt reservation' ).
+        lr_column->set_medium_text( 'Rcpt reservation' ).
+        lr_column->set_short_text( 'Rcpt.Reser' ).
+      CATCH cx_salv_not_found.                          "#EC NO_HANDLER
+    ENDTRY.
+
+    TRY.
+
+        lr_column = lr_columns->get_column( 'MAKTX' ).
+        lr_column->set_long_text( 'Material Description' ).
+        lr_column->set_medium_text( 'Description' ).
+        lr_column->set_short_text( 'Mat.Desc' ).
+      CATCH cx_salv_not_found.                          "#EC NO_HANDLER
+    ENDTRY.
+
+*-- header
+    settings = gr_tree->get_tree_settings( ).
+    settings->set_hierarchy_header( 'Client/Company Code/Plant /Storage Location/Batch/Special Stock ').
+    settings->set_hierarchy_size( 30 ).
+*    settings->set_hierarchy_icon( '@3M @' )."EJ
+
+*-- functions
+    gr_functions = gr_tree->get_functions( ).
+    gr_functions->set_all( abap_true ).
+
+*-- Display the table
+    gr_tree->display( ).
+  ENDFORM.
+*ENDCLASS.
+
+
+*
+*&---------------------------------------------------------------------*
+*& Form CREATE_TREE
+*&---------------------------------------------------------------------*
+* text
+*----------------------------------------------------------------------*
+* --> p1 text
+* <-- p2 text
+*----------------------------------------------------------------------*
+  FORM create_tree .
+
+    DATA: l_werks_key TYPE lvc_nkey,
+          l_matnr_key TYPE lvc_nkey,
+          l_last_key  TYPE lvc_nkey,
+          l_lgort_key TYPE lvc_nkey.
+    SORT gt_final BY matnr werks.
+    DATA(it_final) = gt_final.
+    DELETE ADJACENT DUPLICATES FROM it_final COMPARING werks.
+
+    LOOP AT it_final INTO DATA(gw_final).
+
+
+      DATA(lv_menge) = REDUCE menge_d( INIT val1 TYPE menge_d
+                               FOR wa IN gt_final WHERE ( werks = gw_final-werks )
+                               NEXT val1 = val1 + wa-menge ).
+      gw_final-menge = lv_menge.
+
+
+      DATA(lv_omeng) = REDUCE menge_d( INIT val1 TYPE menge_d
+                         FOR wa IN gt_final WHERE ( werks = gw_final-werks )
+                         NEXT val1 = val1 + wa-omeng ).
+      gw_final-omeng = lv_omeng.
+
+
+      DATA(lv_bdmng) = REDUCE bdmng2( INIT val2 TYPE bdmng2
+                         FOR wa IN gt_final WHERE ( werks = gw_final-werks )
+                         NEXT val2 = val2 + wa-bdmng ).
+      gw_final-bdmng = lv_bdmng.
+
+
+      DATA(lv_bdmns) = REDUCE bdmng( INIT val3 TYPE bdmng
+                         FOR wa IN gt_final WHERE ( werks = gw_final-werks )
+                         NEXT val3 = val3 + wa-bdmns ).
+      gw_final-bdmns = lv_bdmns.
+
+      DATA(lv_umlmc) = REDUCE umlmc2( INIT val4 TYPE umlmc2
+                         FOR wa IN gt_final WHERE ( werks = gw_final-werks )
+                         NEXT val4 = val4 + wa-umlmc ).
+      gw_final-umlmc = lv_umlmc.
+
+
+      MODIFY it_final FROM gw_final TRANSPORTING labst menge omeng bdmng bdmns umlmc.
+
+      CLEAR:lv_menge,lv_omeng,lv_bdmng,lv_bdmns,lv_umlmc.
+    ENDLOOP.
+
+    LOOP AT it_final INTO DATA(wa_final).
+*     *-- on change of werks
+      DATA(lv_labst) = REDUCE labst2( INIT val TYPE labst2
+                       FOR wa IN gt_final WHERE ( werks = wa_final-werks )
+                       NEXT val = val + wa-labst1 ).
+      wa_final-labst = lv_labst.
+      CLEAR lv_labst.
+      PERFORM add_werks_line USING wa_final
+      ' '
+      CHANGING l_werks_key.
+      LOOP AT gt_final INTO gw_final WHERE werks = wa_final-werks.
+
+        ON CHANGE OF gw_final-lgort.
+
+          PERFORM add_lgort_line USING gw_final
+          l_werks_key
+          CHANGING l_lgort_key.
+        ENDON.
+*-- Add Line
+        PERFORM add_complete_line USING gw_final
+        l_lgort_key
+        CHANGING l_last_key.
+      ENDLOOP.
+    ENDLOOP.
+  ENDFORM. " CREATE_TREE
+*&---------------------------------------------------------------------*
+*& Form ADD_WERKS_LINE
+*&---------------------------------------------------------------------*
+* text
+*----------------------------------------------------------------------*
+* -->P_WA_ITAB text
+* -->P_0474 text
+* <--P_L_WERKS_KEY text
+*----------------------------------------------------------------------*
+  FORM add_werks_line USING ls_itab LIKE gw_final
+                            p_key
+                            CHANGING p_werks_key.
+
+    DATA: nodes    TYPE REF TO cl_salv_nodes,
+          node     TYPE REF TO cl_salv_node,
+          item     TYPE REF TO cl_salv_item,
+          lv_text  TYPE lvc_value,
+          ls_data  LIKE gw_final,
+          lt_value TYPE salv_t_nodes,
+          ls_value TYPE salv_s_nodes,
+          lt_node  TYPE salv_t_nodes,
+          ls_node  TYPE salv_s_nodes,
+          lr_sel   TYPE REF TO cl_salv_selections_tree.
+    ls_data = ls_itab.
+    SELECT SINGLE name1 FROM t001w INTO @DATA(lv_name1) WHERE werks = @ls_itab-werks.
+
+    CONCATENATE ls_itab-werks lv_name1 INTO lv_text SEPARATED BY space.
+
+*... §0 working with nodes
+    nodes = gr_tree->get_nodes( ).
+    CLEAR:ls_data-maktx,ls_data-meins.
+    TRY.
+        node = nodes->add_node( related_node = p_key
+                                data_row = ls_data
+                                relationship = cl_gui_column_tree=>relat_last_child
+                                collapsed_icon = '@A8@'
+                                expanded_icon = '@A8@'
+                                expander = 'X'
+                               ).
+        node->set_text( lv_text ).
+        p_werks_key = node->get_key( ).
+
+      CATCH cx_salv_msg.
+    ENDTRY.
+    node->expand(  EXPORTING complete_subtree = abap_true  ).
+  ENDFORM. " ADD_WERKS_LINE
+*&---------------------------------------------------------------------*
+*& Form ADD_COMPLETE_LINE
+*&---------------------------------------------------------------------*
+* text
+*----------------------------------------------------------------------*
+* -->P_WA_ITAB text
+* -->P_L_MATNR_KEY text
+* <--P_L_LAST_KEY text
+*----------------------------------------------------------------------*
+  FORM add_complete_line USING ls_itab LIKE gw_final
+   p_matnr_key
+   CHANGING p_last_key.
+
+    DATA: nodes TYPE REF TO cl_salv_nodes,
+          node  TYPE REF TO cl_salv_node.
+
+    DATA: l_layout_node  TYPE lvc_s_layn,
+          lt_layout_item TYPE lvc_t_layi,
+          ls_layout_item TYPE lvc_s_layi.
+    DATA: lv_text TYPE lvc_value.
+
+    CLEAR:ls_itab-menge,ls_itab-bdmng,ls_itab-bdmns.
+    nodes = gr_tree->get_nodes( ).
+
+    TRY.
+        node = nodes->add_node( related_node = p_matnr_key
+                                data_row = ls_itab
+                                relationship = cl_gui_column_tree=>relat_last_child
+                                collapsed_icon = '@EJ@'
+                                expanded_icon = '@EJ@'
+                                ).
+
+        p_last_key = node->get_key( ).
+
+        lv_text = ls_itab-charg .
+        node->set_text( lv_text ).
+
+      CATCH cx_salv_msg.
+    ENDTRY.
+  ENDFORM. " ADD_COMPLETE_LINE
+*&---------------------------------------------------------------------*
+*& Form add_lgort_line
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> GW_FINAL
+*&      --> P_
+*&      <-- L_LGORT_KEY
+*&---------------------------------------------------------------------*
+  FORM add_lgort_line  USING ls_itab LIKE gw_final
+   p_key
+   CHANGING p_lgort_key.
+
+    DATA: nodes TYPE REF TO cl_salv_nodes,
+          node  TYPE REF TO cl_salv_node,
+          item  TYPE REF TO cl_salv_item.
+    DATA: lv_text TYPE lvc_value.
+    DATA: ls_data LIKE gw_final.
+
+    ls_data = ls_itab.
+    DATA(lv_labst) = REDUCE labst2( INIT val TYPE labst2
+                 FOR wa IN gt_final WHERE ( lgort = ls_itab-lgort )
+                 NEXT val = val + wa-labst ).
+    ls_data-labst = lv_labst.
+
+    SELECT SINGLE lgobe FROM t001l INTO @DATA(lv_lgobe)
+                         WHERE werks = @ls_itab-werks
+                         AND lgort = @ls_itab-lgort.
+    CONCATENATE ls_itab-lgort lv_lgobe INTO lv_text SEPARATED BY space.
+    CLEAR lv_lgobe.
+*... §0 working with nodes
+    nodes = gr_tree->get_nodes( ).
+
+    TRY.
+* ... §0.1 add a new node
+* ... §0.3 set the data for the nes node
+        node = nodes->add_node( related_node = p_key
+                                data_row = ls_data
+                                relationship = cl_gui_column_tree=>relat_last_child
+                                collapsed_icon = '@AC@'
+                                expanded_icon = '@AC@'
+                                expander = 'X').
+        node->set_text( lv_text ).
+        p_lgort_key = node->get_key( ).
+
+      CATCH cx_salv_msg.
+    ENDTRY.
+
+  ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form uom_converstion
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> GW_FINAL_MATNR
+*&      --> GW_MC29V_MEINS
+*&      --> OLD_MENGE
+*&      <-- NEW_MENGE
+*&---------------------------------------------------------------------*
+  FORM uom_converstion  USING   matnr TYPE matnr
+                                meins TYPE meins
+                            old_menge TYPE plfh-mgvgw
+                             lv_meinh TYPE meins
+                        CHANGING new_menge TYPE plfh-mgvgw.
+
+    CALL FUNCTION 'CF_UT_UNIT_CONVERSION'
+      EXPORTING
+        matnr_imp     = matnr
+*       MEINS_IMP     = ' '
+        unit_new_imp  = lv_meinh
+        unit_old_imp  = meins
+        value_old_imp = old_menge
+      IMPORTING
+        value_new_exp = new_menge
+      EXCEPTIONS
+        overflow      = 1
+        OTHERS        = 2.
+    IF sy-subrc <> 0.
+* Implement suitable error handling here
+    ENDIF.
+
+
+  ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form get_on_order_stc
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> WA_MARD_MATNR
+*&      --> WA_MARD_MEINS
+*&      <-- XTAB
+*&---------------------------------------------------------------------*
+  FORM get_on_order_stc  USING    wa_mard_matnr TYPE matnr
+                                  wa_mard_meins TYPE meins
+                         CHANGING xtab LIKE xtab_t1.
+    CALL FUNCTION 'MB_ADD_PURCHASE_ORDER_QUANTITY'
+      EXPORTING
+        x_matnr = wa_mard_matnr
+        x_meins = wa_mard_meins
+        x_elikz = space
+        x_loekz = space
+      TABLES
+        xtab    = xtab
+        xwerks  = l_werks.
+  ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form rcpt_reservation
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> WA_MARD_MATNR
+*&      <-- XTAB_T2
+*&---------------------------------------------------------------------*
+  FORM rcpt_reservation  USING    wa_mard_matnr TYPE matnr
+                         CHANGING xtab_t2 LIKE xtab1_t2.
+
+    CLEAR xtab1_t2. REFRESH xtab1_t2.
+    CALL FUNCTION 'MB_ADD_RESERVATION_QUANTITIES'
+      EXPORTING
+        x_matnr     = wa_mard_matnr
+        x_xloek     = space
+        x_kzear     = space
+        x_kzwso     = kzwso          "ALRK014884 SW
+      TABLES
+        xtab1       = xtab1_t2
+        xwerks      = l_werks
+        xbdart      = xbdart
+        ir_sgt_catv = gr_sgt_scat.
+
+  ENDFORM.
+
+
